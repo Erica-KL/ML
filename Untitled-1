@@ -1,0 +1,42 @@
+Q1
+--------------------------------------------------------------
+x^2 or something more complicated
+try to find a differnt model to make it work -linear can not work in this regard
+Courses for next semester- Physics 1 section 2 mwf 10-11 , Machine Learning Class tuth, OOP - simulation game, Data Structure and Algorithms 9:30-10:45
+Q2
+---------------------------------------------------------------
+performance of testing concerns- 
+introduce noise into transition
+state transition is also noisy
+ready to explore: differential equations
+some simple ODE - describe evolution 
+DS: -state of dynamic system maybe not a scatter perhaps vector
+function of t
+after noise - capture ODE physcially informed system ds/dt = F(s...)
+On time access t1 t*1 
+S(t) S(t+1) Limit of Delta T > oo (DS-DT)/Delta T= how states vary
+some cases can be solved exactly some can be solved analytically
+express 
+In reality not applicable in reality 
+generate a sequence of states 
+[So,S1,S2] continous 
+This method is called a simulation 
+Drawbacks- approximation
+questionable qualilty
+leads to more events numerical methods
+computational efficiency of simulation is low quality guess or be slow or large
+Utilization of optimizations to model state if we can do that we can find osmewhere inbetween
+To guess the states 
+Explore how to generate a swquence of states how to solve ode using simulations
+explore ODE simulation
+ODE - how to use a simulation start with a simple ODE 
+Scatter ODE not a vector 
+How ml can reproduce what those texts will reproduce this simulation will be the new dynamical system 
+those simulations are used to mimic those simulations and indirectly solved those ODE
+expect problems
+stochastic gradient dissent  - ADAM - ODE 
+ds-dt/delta t  how would this behave upon objectives - flow matching - 
+Tutorial on deterministic ODE 
+
+-----------------------------------------------------------------------
+

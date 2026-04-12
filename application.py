@@ -201,7 +201,11 @@ def predict_inputs():
         try: inp = float(request.form.get(f"n{node.id}", 0))
         except: inp = 0.0
         features = np.array([[node.state, node.value, inp, node.weight, node.threshold]])
-        pred = float(model.predict(features)[0])
+
+        dt = 0.1
+        delta = float(model.predict(features)[0])   #NEW!!! predicitions
+        pred = node.value + dt * delta              #state changes
+
         prediction_results[node.id] = pred
     return redirect(url_for('home'))
 
@@ -213,7 +217,8 @@ def input_step():
         except: inp = 0.0
         old = (node.state, node.value, node.weight, node.threshold)
         node.step(inputs=[inp])
-        dataset.append([old[0], old[1], inp, old[2], old[3], node.value])
+        delta = node.value - old[1] #NEW!!! instead of incrementing state its ds/dt
+        dataset.append([old[0], old[1], inp, old[2], old[3], delta])
     snapshot()
     return redirect(url_for('home'))
 

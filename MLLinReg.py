@@ -6,7 +6,7 @@ def trainModel(dataset):
     y = data[:, -1]
 
     model = MLPRegressor(
-        hidden_layer_sizes=(5), #two hidden layers with 15 neurons
+        hidden_layer_sizes=(5), #one hidden layer with 5 neurons
         activation='relu',
         max_iter=2000
     )

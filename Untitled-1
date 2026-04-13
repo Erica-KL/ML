@@ -39,4 +39,6 @@ ds-dt/delta t  how would this behave upon objectives - flow matching -
 Tutorial on deterministic ODE 
 
 -----------------------------------------------------------------------
+ODE for states is predicted by ds dt 
+Noise of 0.5 added
 

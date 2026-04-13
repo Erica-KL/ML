@@ -1,7 +1,7 @@
 import numpy as np
 
 class LearningNode:
-    def __init__(self, node_id, initial_state):
+    def __init__(self, node_id, initial_state): #initial values for the node
         self.id = node_id
         self.state = initial_state
         self.value = 0.0
@@ -10,24 +10,19 @@ class LearningNode:
         self.min_state = -10
         self.max_state = 10
 
-    def step(self, inputs=None):
-        # Advance state (clamped)
-        self.state = min(self.state + 1, self.max_state)
+    def step(self, inputs=None, dt=0.1, noise_sigma=0.5, model=None): #noise of 0.5
+        inp = sum(inputs) if inputs else 0.0
 
-        # Compute delta from inputs
-        delta = sum(inputs) if inputs else 0.0
+        if model is not None: #once trainded predict the change in state
+            features = np.array([[self.state, self.value, inp, self.weight, self.threshold]])
+            F = float(model.predict(features)[0])
+        else:
+            F = np.tanh(inp * self.weight - self.threshold) * 2.0
 
-        # Stable value update: tanh-bounded weighted blend
-        raw = (
-            self.value * 0.85 +
-            np.tanh(delta * 0.1) * 5.0 +
-            np.sin(self.state * 0.5) * self.weight
-        )
-        self.value = float(np.clip(raw, -1000, 1000))
+        noise = np.random.normal(0, noise_sigma)
+        ds_dt = F + noise
+        self.value = self.value + dt * ds_dt
+        self.value = float(np.clip(self.value, -100, 100))
+        self.state = int(np.clip(self.state + 1, self.min_state, self.max_state))
 
-        # Slowly adapt weight toward activity level
-        activity = abs(delta)
-        self.weight = float(np.clip(self.weight * 0.99 + activity * 0.01, 0.01, 10.0))
-
-        # Threshold drifts toward median weight region
-        self.threshold = float(np.clip(self.threshold * 0.98 + self.weight * 0.02, 0.01, 5.0))
+        return ds_dt

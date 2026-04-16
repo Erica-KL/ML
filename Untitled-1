@@ -41,4 +41,34 @@ Tutorial on deterministic ODE
 -----------------------------------------------------------------------
 ODE for states is predicted by ds dt 
 Noise of 0.5 added
+Stommal Two Box Models
+try out
+try to incorporate stommal two box model
+First step
+Understand Circulation- 
+Understand the ODE system from the Stommal model
+simulation solve it numerically 
+numerical solution to the ODE system Stommal model
+In machine learning there are 2 branches 
+1. Neural ODE Classical System- use a neural network to model the derivitive train the model using the data we have from the simulation
+2. Physics informed machine learning- simulatineously with training. 
+3. is
+4.
+Make the programs run through these scenarios
+if the ODE system is noisy what then will happen. 
+Data Visualization
+Vector field 
+graph for it
+measure the quality of the solution 
+figure out why my numbers lean negatively when randon is -1 to 3?
+go through 
+what kind of questions you can ask? Dont use real data
+Use the models- can we interpert the real data with the model.
+Read between
+1.Differential equations 
+2.Dynamical Systems 
+3.Machine Learning 
+
+-------------------------------------------------------------------
+
 

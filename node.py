@@ -10,7 +10,7 @@ class LearningNode:
         self.min_state = -10
         self.max_state = 10
 
-    def step(self, inputs=None, dt=0.1, noise_sigma=0.5, model=None): #noise of 0.5
+    def step(self, inputs=None, dt=0.1, noise_sigma=0.7, model=None): #noise of 0.7
         inp = sum(inputs) if inputs else 0.0
 
         if model is not None: #once trainded predict the change in state

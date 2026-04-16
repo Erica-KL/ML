@@ -98,9 +98,9 @@ def home():
     html += "<table><tr><th>ID</th><th>State</th><th>Value</th><th>Weight</th><th>Threshold</th><th>Predicted ds/dt</th><th>Predicted Value</th></tr>"
     for n in display_nodes:
         t = (n.state - n.min_state) / (n.max_state - n.min_state)
-        r = int(232 + (58  - 232) * t)
-        g = int(160 + (157 - 160) * t)
-        b = int(180 + (191 - 180) * t)
+        r = int(232 + (58  - 232) * t) #red
+        g = int(160 + (157 - 160) * t) #green
+        b = int(180 + (191 - 180) * t) 
         c = f"rgb({r},{g},{b})"
         pred_val = f"{prediction_results[n.id]:+.4f}" if n.id in prediction_results else "—"
         pred_next = f"{predicted_values[n.id]:.4f}" if n.id in predicted_values else "—"

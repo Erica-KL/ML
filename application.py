@@ -29,7 +29,7 @@ def trainModel(dataset):
     data = np.array(dataset)
     X = data[:, :-1]
     y = data[:, -1]
-    m = MLPRegressor(hidden_layer_sizes=(34, 34), activation='relu', max_iter=2000, random_state=42)
+    m = MLPRegressor(hidden_layer_sizes=(5), activation='relu', max_iter=2000, random_state=42)
     m.fit(X, y)
     return m
 
@@ -50,7 +50,7 @@ def home():
     NODE_COUNT = int(request.args.get("n", len(nodes)))
     while len(nodes) < NODE_COUNT:
         node = LearningNode(node_id=len(nodes)+1, initial_state=0)
-        node.value = random.uniform(-1, 3)
+        node.value = random.uniform(1, 3)
         nodes.append(node)
     if len(nodes) > NODE_COUNT:
         nodes[:] = nodes[:NODE_COUNT]

@@ -42,6 +42,7 @@ Tutorial on deterministic ODE
 ODE for states is predicted by ds dt 
 Noise of 0.5 added
 Stommal Two Box Models
+instead of stomel use ogcm
 try out
 try to incorporate stommal two box model
 First step

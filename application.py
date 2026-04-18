@@ -17,49 +17,49 @@ DT = 0.1
 NOISE_SIGMA = 0.5
 
 # --- NODE INITIALIZATION ---
-initial_values = [-1, 0, 1, 2, 3]
-nodes = []
-for i, val in enumerate(initial_values):
-    node = LearningNode(node_id=i+1, initial_state=0)
-    node.value = val
-    nodes.append(node)
+initial_values = [-1, 0, 1, 2, 3] #inital node values
+nodes = [] #list of nodes
+for i, val in enumerate(initial_values): #create nodes with the aformnetioned values
+    node = LearningNode(node_id=i+1, initial_state=0) #create a node with id and initial state
+    node.value = val #assign the initial value 
+    nodes.append(node) #add the node to the list of nodes
 
 
-def trainModel(dataset):
-    data = np.array(dataset)
-    X = data[:, :-1]
-    y = data[:, -1]
-    m = MLPRegressor(hidden_layer_sizes=(5), activation='relu', max_iter=2000, random_state=42)
-    m.fit(X, y)
-    return m
+def trainModel(dataset): #train the model from the data
+    data = np.array(dataset) #the data is an array now
+    X = data[:, :-1] #collums -1
+    y = data[:, -1]  #last collum
+    m = MLPRegressor(hidden_layer_sizes=(5), activation='relu', max_iter=2000, random_state=42) #MLP regressor with 5 hidden neurons
+    m.fit(X, y) #fit 
+    return m #return model
 
 
 # --- SNAPSHOT ---
-def snapshot():
-    state_log.append({
-        "time": datetime.datetime.now().strftime("%H:%M:%S"),
-        "states": {node.id: round(node.value, 3) for node in nodes}
+def snapshot(): #log the current state of all nodes 
+    state_log.append({ #time on nodes
+        "time": datetime.datetime.now().strftime("%H:%M:%S"), #right now
+        "states": {node.id: round(node.value, 3) for node in nodes} #state of the nodes
     })
 
 
 # --- HOME ---
-@app.route("/", methods=["GET"])
-def home():
-    global model
+@app.route("/", methods=["GET"]) #home page 
+def home(): 
+    global model 
 
-    NODE_COUNT = int(request.args.get("n", len(nodes)))
-    while len(nodes) < NODE_COUNT:
-        node = LearningNode(node_id=len(nodes)+1, initial_state=0)
-        node.value = random.uniform(1, 3)
-        nodes.append(node)
-    if len(nodes) > NODE_COUNT:
-        nodes[:] = nodes[:NODE_COUNT]
+    NODE_COUNT = int(request.args.get("n", len(nodes))) #numbrt of nodes from input
+    while len(nodes) < NODE_COUNT: #more if needed
+        node = LearningNode(node_id=len(nodes)+1, initial_state=0) #create new node with id and initial state
+        node.value = random.uniform(0, 3) #assign random value between 1 and 3
+        nodes.append(node) #add it
+    if len(nodes) > NODE_COUNT: #cutoff 
+        nodes[:] = nodes[:NODE_COUNT] #keep only the first its 50 nodes
 
-    if len(dataset) >= 5 and model is None:
-        model = trainModel(dataset)
+    if len(dataset) >= 5 and model is None: #train the model but not if we have under 5
+        model = trainModel(dataset) #train the model
 
-    MAX_DISPLAY = 50
-    display_nodes = nodes[:MAX_DISPLAY]
+    MAX_DISPLAY = 100 #display 100
+    display_nodes = nodes[:MAX_DISPLAY] #display 100 nodes now used to be 50 
 
     html = """
     <html><head><style>
@@ -185,7 +185,7 @@ Fill all: <input type="number" id="fill-val" step="0.1" value="0">
     return html
 
 @app.route("/predict_inputs", methods=["POST"]) #ds/dt preditction
-def predict_inputs():
+def predict_inputs(): #predict the ds/dt (need to change to stommel or ogcm)
     global model, prediction_results, predicted_values
     prediction_results = {}
     predicted_values = {}

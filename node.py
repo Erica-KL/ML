@@ -21,7 +21,7 @@ def psi(self): #psi= T-S overturning circulation strength
 def regime(self): #meridonal overturining strength
     return "TH" if self.psi > 0 else "SA"
 
-def step(self, inputs=None, dt=0.1, noise_sigma=0.5, model=None): #dt, noise, model
+def step(self, inputs=None, dt=0.1, noise_sigma=0.7, model=None): #dt, noise, model
     inp = sum(inputs) if inputs else 0.0 #sum of inputs
     eta2_eff = self.eta2 + inp #changes in salinity like melting fresh water
 

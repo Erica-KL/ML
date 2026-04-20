@@ -71,5 +71,8 @@ Read between
 3.Machine Learning 
 
 -------------------------------------------------------------------
-
+ try OGCM too? 
+ two seperate files probably.
+ dT/dt = eta1 - T*(1 + |T - S|)
+dS/dt = eta2 - S*(eta3 + |T - S|)
 

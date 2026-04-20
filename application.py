@@ -2,6 +2,7 @@ from flask import Flask, redirect, url_for, request
 from node import LearningNode
 import datetime
 import random
+import math
 import numpy as np
 from sklearn.neural_network import MLPRegressor
 
@@ -247,18 +248,18 @@ def smart_run_input():
                 predicted_dsdt = float(model.predict(test)[0])
                 inp = predicted_dsdt * 0.5   # nudge input in direction of predicted derivative
             old = (node.state, node.value, node.weight, node.threshold)
-            ds_dt = node.step(inputs=[inp], dt=DT, noise_sigma=NOISE_SIGMA, model=model)
-            dataset.append([old[0], old[1], inp, old[2], old[3], ds_dt])
-        snapshot()
-    return redirect(url_for('home'))
+            ds_dt = node.step(inputs=[inp], dt=DT, noise_sigma=NOISE_SIGMA, model=model) #use the model to step 
+            dataset.append([old[0], old[1], inp, old[2], old[3], ds_dt]) #add to dataset
+        snapshot() #snapshot 
+    return redirect(url_for('home')) 
 
 @app.route("/train") #retrain 
-def train():
-    global model
-    if len(dataset) >= 5:
-        model = trainModel(dataset)
-    return redirect(url_for('home'))
+def train(): #define train
+    global model #train the model with the restrictions
+    if len(dataset) >= 5: #minimum 5 runs
+        model = trainModel(dataset) #train the model
+    return redirect(url_for('home')) #return home well rediriect 
 
 
-if __name__ == "__main__":
-    app.run(debug=True) 
+if __name__ == "__main__": #if main
+    app.run(debug=True) #run

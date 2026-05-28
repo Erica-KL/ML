@@ -2,121 +2,247 @@ from flask import Flask, redirect, url_for, request
 from node import LearningNode
 import datetime
 import random
+import json
 import numpy as np
-from sklearn.neural_network import MLPRegressor
+import torch
+import torch.nn as nn
 
 app = Flask(__name__)
 
 model = None
-dataset = []   #data      
+dataset = []   #data rows: [T, S, eta1, eta2_eff, eta3, inp, next_T, next_S]
 state_log = [] #log in case something goes terribly wrong
-prediction_results = {}  #ds/dt results
-predicted_values = {}    #actual predicted values
+prediction_results = {}  #predicted next_T, next_S from model, keyed by node id
 DT = 0.1 #time step NECCESSITY for stommel
-NOISE_SIGMA = 0.7 #noise 0.7 instead of 0.5 now 
+NOISE_SIGMA = 0.5 #noise represents real ocean variability
+NODE_COUNT = 50 #fixed number of sensor nodes
+
+# use GPU if available, otherwise CPU
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+# --- STOMMELNET ---
+# predicts next_T, next_S from 6 stommel features: T, S, eta1, eta2_eff, eta3, inp
+# targets are clean RK4 values — noise is external forcing on state, not in training signal
+class StommelNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(6, 64),  #6 inputs: T, S, eta1, eta2_eff, eta3, inp
+            nn.ReLU(),
+            nn.Linear(64, 64), #hidden layer
+            nn.ReLU(),
+            nn.Linear(64, 32), #hidden layer
+            nn.ReLU(),
+            nn.Linear(32, 2)   #output: next_T, next_S
+        )
+
+    def forward(self, x): #forward pass
+        return self.net(x) #shape [batch, 2]
+
+
+def stommel_residual(X_batch, pred): #physics residual — penalize predictions that violate Stommel equations
+    # features: [T, S, eta1, eta2_eff, eta3, inp]
+    T        = X_batch[:, 0]
+    S        = X_batch[:, 1]
+    eta1     = X_batch[:, 2]
+    eta2_eff = X_batch[:, 3]
+    eta3     = X_batch[:, 4]
+    psi      = T - S #Ψ = T - S
+    dT_dt    = eta1     - T * (1.0 + torch.abs(psi)) #stommels first box
+    dS_dt    = eta2_eff - S * (eta3 + torch.abs(psi)) #stommels second box
+    true_next_T = T + DT * dT_dt #what Stommel says next T should be
+    true_next_S = S + DT * dS_dt #what Stommel says next S should be
+    pred_T = pred[:, 0] #model predicted next T
+    pred_S = pred[:, 1] #model predicted next S
+    return torch.mean((pred_T - true_next_T) ** 2 + (pred_S - true_next_S) ** 2) #MSE against physics
+
+
+def trainModel(dataset): #train StommelNet with PINN loss — data MSE + physics residual
+    data = np.array(dataset, dtype=np.float32)
+    X = torch.tensor(data[:, :6],  dtype=torch.float32).to(DEVICE) #features: T, S, eta1, eta2_eff, eta3, inp
+    y = torch.tensor(data[:, 6:],  dtype=torch.float32).to(DEVICE) #targets: next_T, next_S
+
+    net = StommelNet().to(DEVICE)
+    optimizer = torch.optim.Adam(net.parameters(), lr=1e-3) #adam optimizer
+    loss_fn = nn.MSELoss()
+    LAMBDA = 10.0 #physics weight — trust equations more than data
+
+    net.train()
+    EPOCHS = 200
+    BATCH  = 512 #mini-batch size
+
+    n = len(X)
+    for epoch in range(EPOCHS):
+        idx = torch.randperm(n, device=DEVICE) #shuffle each epoch
+        for start in range(0, n, BATCH):
+            batch_idx = idx[start:start + BATCH]
+            X_batch = X[batch_idx]
+            pred = net(X_batch)
+            data_loss    = loss_fn(pred, y[batch_idx]) #how well model fits clean RK4 targets
+            physics_loss = stommel_residual(X_batch, pred) #how much model violates Stommel ODEs
+            loss = data_loss + LAMBDA * physics_loss #PINN total loss
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+    net.eval()
+    return net
+
+
+def predict(net, features): #single inference — returns predicted next_T, next_S
+    net.eval()
+    with torch.no_grad():
+        x = torch.tensor(features, dtype=torch.float32).to(DEVICE)
+        out = net(x).cpu().numpy()[0] #shape [2]
+        return float(out[0]), float(out[1]) #next_T, next_S
+
+
+def regimeAccuracy(net, dataset): #% of samples where predicted regime matches true regime
+    data = np.array(dataset, dtype=np.float32)
+    X = torch.tensor(data[:, :6], dtype=torch.float32).to(DEVICE)
+    true_psi = data[:, 6] - data[:, 7] #next_T - next_S = true next psi
+    with torch.no_grad():
+        pred = net(X).cpu().numpy()
+    pred_psi = pred[:, 0] - pred[:, 1] #predicted next_T - next_S
+    return float(np.mean(np.sign(pred_psi) == np.sign(true_psi)) * 100)
+
 
 # --- NODE INITIALIZATION ---
-initial_conditions = [
-    {"T": 2.0, "S": 0.5,  "eta2": 0.8}, #eta1 and eta3 are the same based on the study now each node contains multiple values the temp salinity and diffusion differeing
-    {"T": 2.5, "S": 0.8,  "eta2": 1.0},
-    {"T": 1.5, "S": 0.3,  "eta2": 1.2},
-    {"T": 3.0, "S": 1.0,  "eta2": 0.9},
-    {"T": 1.0, "S": 0.6,  "eta2": 1.1},
-]
+random.seed(42) #seed so positions are the same every restart
 nodes = []
-for i, ic in enumerate(initial_conditions): #
-    node = LearningNode( #node = learning node
-        node_id=i+1, #node id
-        initial_T=ic["T"], initial_S=ic["S"], #initial temp and salinity 
-        eta1=3.0, eta2=ic["eta2"], eta3=0.1 #Thermal forcing same for each, Salinity forcing referencing intial values, diffusion same for each
+for i in range(NODE_COUNT):
+    node = LearningNode(
+        node_id=i+1,
+        initial_T=random.uniform(1.0, 3.0),   #realistic stommel T range
+        initial_S=random.uniform(0.3, 1.0),   #realistic stommel S range
+        eta1=3.0,                              #thermal forcing, same for all per the study
+        eta2=random.uniform(0.8, 1.2),         #salinity forcing, varies by location
+        eta3=0.1,                              #diffusivity, same for all per the study
+        x=random.uniform(0, 100),             #longitude-like position
+        y=random.uniform(0, 100),             #latitude-like position
+        z=random.uniform(0, 100)              #depth-like position
     )
-    nodes.append(node) #add node to nodes list
-
-
-def trainModel(dataset): #train the model from the data
-    data = np.array(dataset) #the data is an array now
-    X = data[:, :-1] #collums -1
-    y = data[:, -1]  #last collum
-    m = MLPRegressor(hidden_layer_sizes=(10, 10), activation='relu', max_iter=2000, random_state=42) #MLP regressor with 5 hidden neurons
-    m.fit(X, y) #fit 
-    return m #return model
+    nodes.append(node)
+random.seed() #unseed so runs stay random after init
 
 
 # --- SNAPSHOT ---
-def snapshot(): #log the current state of all nodes 
-    state_log.append({ #time on nodes
+def snapshot(): #log the current state of all nodes
+    state_log.append({
         "time": datetime.datetime.now().strftime("%H:%M:%S"), #right now
         "states": {node.id: round(node.psi, 3) for node in nodes} #psi value for each node rounded to thousandth
     })
 
 
-# --- HOME ---
-@app.route("/", methods=["GET"]) #home page 
-def home(): 
-    global model 
+# --- BUILD 3D SCATTER DATA FOR PLOTLY ---
+def build_graph_data(): #pack node positions and state into plotly-ready json
+    th_nodes = [n for n in nodes if n.regime == "TH"] #split by regime for separate traces
+    sa_nodes = [n for n in nodes if n.regime == "SA"]
 
-    NODE_COUNT = int(request.args.get("n", len(nodes))) #numbrt of nodes from input
-    while len(nodes) < NODE_COUNT: #more if needed
-        node = LearningNode( #create new node with new API
-            node_id=len(nodes)+1,
-            initial_T=random.uniform(1.0, 3.0), #random temp in realistic range
-            initial_S=random.uniform(0.3, 1.0), #random salinity in realistic range
-            eta1=3.0, eta2=random.uniform(0.8, 1.2), eta3=0.1
-        )
-        nodes.append(node) #add it
-    if len(nodes) > NODE_COUNT: #cutoff 
-        nodes[:] = nodes[:NODE_COUNT] #keep only the first its 50 nodes
+    def trace(group, name, color): #helper to build one plotly trace dict
+        return {
+            "type": "scatter3d",
+            "mode": "markers",
+            "name": name,
+            "x": [n.x for n in group],
+            "y": [n.y for n in group],
+            "z": [n.z for n in group],
+            "text": [f"Node {n.id}<br>T={n.T:.3f}<br>S={n.S:.3f}<br>Ψ={n.psi:.3f}" for n in group], #hover text
+            "hoverinfo": "text",
+            "marker": {
+                "size": 6,
+                "color": [n.psi for n in group], #color by psi value
+                "colorscale": [[0, color[0]], [1, color[1]]], #gradient within regime
+                "showscale": False
+            }
+        }
+
+    data = []
+    if th_nodes: data.append(trace(th_nodes, "TH", ["#aed6f1", "#1a5276"])) #light to dark blue for TH
+    if sa_nodes: data.append(trace(sa_nodes, "SA", ["#f1948a", "#922b21"])) #light to dark red for SA
+
+    layout = {
+        "paper_bgcolor": "#f5f0e8",
+        "plot_bgcolor":  "#f5f0e8",
+        "margin": {"l": 0, "r": 0, "t": 30, "b": 0},
+        "legend": {"x": 0, "y": 1},
+        "scene": {
+            "xaxis": {"title": "X", "backgroundcolor": "#f5f0e8"},
+            "yaxis": {"title": "Y", "backgroundcolor": "#f5f0e8"},
+            "zaxis": {"title": "Z (depth)", "backgroundcolor": "#f5f0e8"}
+        }
+    }
+    return json.dumps({"data": data, "layout": layout})
+
+
+# --- HOME ---
+@app.route("/", methods=["GET"]) #home page
+def home():
+    global model
 
     if len(dataset) >= 5 and model is None: #train the model but not if we have under 5
-        model = trainModel(dataset) #train the model
+        model = trainModel(dataset)
 
-    MAX_DISPLAY = 100 #display 100
-    display_nodes = nodes[:MAX_DISPLAY] #display 100 nodes now used to be 50 
+    display_nodes = nodes[:100] #cap table at 100 rows for readability
 
-    html = """<html><head><style>
-        body { font-family: Arial, sans-serif; background-color: #fff0f5; color: #2c4a5a; margin: 20px; }
-        h1 { color: #3a9dbf; }
-        h2 { color: #e8a0b4; }
+    html = """<html><head>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f5f0e8; color: #1a2e3b; margin: 20px; }
+        h2 { color: #2e86c1; }
         table { border-collapse: collapse; width: 90%; margin-bottom: 20px; }
-        th, td { border: 1px solid #f4c4d4; padding: 8px; text-align: center; }
-        th { background-color: #fde8f0; color: #c0446a; }
-        .section { margin-top: 24px; border-top: 2px solid #f4c4d4; padding-top: 14px; }
+        th, td { border: 1px solid #aec6cf; padding: 8px; text-align: center; }
+        th { background-color: #d6eaf8; color: #1a5276; }
+        .section { margin-top: 24px; border-top: 2px solid #aec6cf; padding-top: 14px; }
         input[type=number] { width: 80px; padding: 4px; }
-        input[type=submit] { background-color: #e8a0b4; color: white; padding: 6px 14px; border: none; cursor: pointer; }
-        input[type=submit]:hover { background-color: #d4849a; }
-        button { background-color: #e8a0b4; color: white; padding: 5px 12px; border: none; cursor: pointer; }
-        button:hover { background-color: #d4849a; }
-        a { color: #3a9dbf; }
+        input[type=submit] { background-color: #2e86c1; color: white; padding: 6px 14px; border: none; cursor: pointer; }
+        input[type=submit]:hover { background-color: #1a5276; }
+        button { background-color: #2e86c1; color: white; padding: 5px 12px; border: none; cursor: pointer; }
+        button:hover { background-color: #1a5276; }
+        a { color: #2e86c1; }
         p { margin: 4px 0; }
         .ni-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
-        .ni { display: flex; flex-direction: column; font-size: 0.8rem; color: #7aa8bc; }
+        .ni { display: flex; flex-direction: column; font-size: 0.8rem; color: #5d8aa8; }
         .ni input { width: 80px; }
+        #graph { width: 100%; height: 500px; }
     </style></head><body>
-
     """
 
-    # node count
-    html += f"""
-    <form method="get">
-        Nodes: <input type="number" name="n" value="{NODE_COUNT}" min="1" max="5000">
-        <input type="submit" value="Update">
-    </form><br>
-    """
+    # 3d graph
+    graph_json = build_graph_data()
+    html += f"""<div class="section">
+<h2>Node Space (3D)</h2>
+<div id="graph"></div>
+<script>
+    var fig = {graph_json};
+    Plotly.newPlot('graph', fig.data, fig.layout, {{responsive: true}});
+</script>
+</div>"""
 
-    # node table
-    html += "<h2>Nodes</h2>"
+    # node table — current state + predicted next Ψ + ΔΨ
+    html += f"<div class='section'><h2>Nodes ({NODE_COUNT} fixed)</h2>"
     html += "<div style='max-height:400px;overflow-y:auto;width:90%'>"
-    html += "<table><tr><th>ID</th><th>T</th><th>S</th><th>Ψ</th><th>Regime</th><th>η₁</th><th>η₂</th><th>Pred dΨ/dt</th><th>Pred next Ψ</th></tr>"
+    html += "<table><tr><th>ID</th><th>T</th><th>S</th><th>Ψ</th><th>Regime</th><th>η₁</th><th>η₂</th><th>Pred next T</th><th>Pred next S</th><th>Pred next Ψ</th><th>ΔΨ</th></tr>"
     for n in display_nodes:
         t = (n.psi - n.min_psi) / (n.max_psi - n.min_psi) #normalize psi to 0-1 for color
         t = max(0.0, min(1.0, t)) #clamp
-        r = int(232 + (58  - 232) * t) #red
-        g = int(160 + (157 - 160) * t) #green
-        b = int(180 + (191 - 180) * t) #blue
+        r = int(245 + (26  - 245) * t)
+        g = int(240 + (86  - 240) * t)
+        b = int(232 + (193 - 232) * t)
         cell_color = f"rgb({r},{g},{b})"
-        regime_color = "#3a9dbf" if n.regime == "TH" else "#e05575" #teal for TH, red for SA
-        pred_dpsi = f"{prediction_results[n.id]:+.4f}" if n.id in prediction_results else "—"
-        pred_next = f"{predicted_values[n.id]:.4f}" if n.id in predicted_values else "—"
+        regime_color = "#1a5276" if n.regime == "TH" else "#c0392b"
+        if n.id in prediction_results:
+            pred_T, pred_S = prediction_results[n.id]
+            pred_psi = pred_T - pred_S #predicted next Ψ = pred_T - pred_S
+            delta_psi = pred_psi - n.psi #how much model expects Ψ to change
+            pred_psi_str  = f"{pred_psi:+.4f}"
+            delta_psi_str = f"{delta_psi:+.4f}"
+            delta_color = "#1a5276" if delta_psi >= 0 else "#c0392b" #blue strengthening, red weakening
+        else:
+            pred_T = pred_S = None
+            pred_psi_str = delta_psi_str = "—"
+            delta_color = "#5d8aa8"
         html += (f"<tr>"
                  f"<td>{n.id}</td>"
                  f"<td>{n.T:.4f}</td>"
@@ -125,12 +251,14 @@ def home():
                  f"<td style='color:{regime_color};font-weight:700'>{n.regime}</td>"
                  f"<td>{n.eta1:.2f}</td>"
                  f"<td>{n.eta2:.2f}</td>"
-                 f"<td style='color:#e8a0b4;font-weight:600'>{pred_dpsi}</td>"
-                 f"<td style='color:#3a9dbf;font-weight:600'>{pred_next}</td>"
+                 f"<td style='color:#2e86c1;font-weight:600'>{f'{pred_T:.4f}' if n.id in prediction_results else '—'}</td>"
+                 f"<td style='color:#c0392b;font-weight:600'>{f'{pred_S:.4f}' if n.id in prediction_results else '—'}</td>"
+                 f"<td style='color:#1a5276;font-weight:600'>{pred_psi_str}</td>"
+                 f"<td style='color:{delta_color};font-weight:600'>{delta_psi_str}</td>"
                  f"</tr>")
-    if len(nodes) > MAX_DISPLAY:
-        html += f"<tr><td colspan='9' style='color:#7aa8bc;font-style:italic'>... and {len(nodes)-MAX_DISPLAY} more</td></tr>"
-    html += "</table></div>"
+    if NODE_COUNT > 100:
+        html += f"<tr><td colspan='11' style='color:#5d8aa8;font-style:italic'>... and {NODE_COUNT-100} more</td></tr>"
+    html += "</table></div></div>"
 
     # manual step
     ni = "".join(
@@ -157,17 +285,8 @@ Fill all: <input type="number" id="fill-val" step="0.1" value="0">
 </form>
 </div>"""
 
-    # smart run
-    html += f"""<div class="section">
-<h2>Guided Training</h2>
-<form action="/smart_run_input" method="post">
-    Steps: <input type="number" name="steps" value="10" min="1" max="1000">
-    <input type="submit" value="Run Smart Steps">
-</form>
-</div>"""
-
-    # prediction
-    html += "<div class='section'><h2>Predict ds/dt</h2>"
+    # prediction — run model on explicit user inputs only
+    html += "<div class='section'><h2>Predict next T and S</h2>"
     if model is None:
         html += "<p><i>Run at least 5 steps — model will auto-train.</i></p>"
     else:
@@ -187,12 +306,11 @@ Fill all: <input type="number" id="fill-val" step="0.1" value="0">
     # model info
     html += "<div class='section'><h2>Model Info</h2>"
     if model:
-        html += f"<p>MLPRegressor &nbsp;|&nbsp; Target: ds/dt &nbsp;|&nbsp; Dataset rows: {len(dataset)}</p>"
+        html += f"<p>StommelNet (PyTorch) &nbsp;|&nbsp; Target: next T, next S &nbsp;|&nbsp; Dataset rows: {len(dataset)}</p>"
         if len(dataset) >= 5:
-            data = np.array(dataset)
-            r2 = model.score(data[:, :-1], data[:, -1])
-            html += f"<p>R² on ds/dt: {r2:.4f}</p>"
-            html += f"<p>dt = {DT} &nbsp;|&nbsp; noise σ = {NOISE_SIGMA}</p>"
+            acc = regimeAccuracy(model, dataset)
+            html += f"<p>Regime sign accuracy: {acc:.1f}%</p>"
+            html += f"<p>dt = {DT} &nbsp;|&nbsp; noise σ = {NOISE_SIGMA} &nbsp;|&nbsp;</p>"
         html += "<p><a href='/train'>↺ Retrain</a></p>"
     else:
         html += "<p><i>Not trained yet. Run 5+ steps.</i></p>"
@@ -208,21 +326,18 @@ Fill all: <input type="number" id="fill-val" step="0.1" value="0">
     return html
 
 
-@app.route("/predict_inputs", methods=["POST"]) #ds/dt preditction
-def predict_inputs(): #predict the ds/dt (need to change to stommel or ogcm)
-    global model, prediction_results, predicted_values
+@app.route("/predict_inputs", methods=["POST"]) #run model on explicit user inputs
+def predict_inputs():
+    global model, prediction_results
     prediction_results = {}
-    predicted_values = {}
     if model is None:
         return redirect(url_for('home'))
     for node in nodes:
         try: inp = float(request.form.get(f"n{node.id}", 0))
         except: inp = 0.0
         eta2_eff = node.eta2 + inp #effective salinity forcing with perturbation
-        features = np.array([[node.T, node.S, node.eta1, eta2_eff, node.eta3]]) #stommel features
-        dpsi_dt = float(model.predict(features)[0])
-        prediction_results[node.id] = dpsi_dt
-        predicted_values[node.id] = node.psi + DT * dpsi_dt #euler step forward
+        features = [[node.T, node.S, node.eta1, eta2_eff, node.eta3, inp]] #stommel features
+        prediction_results[node.id] = predict(model, features) #returns (next_T, next_S)
     return redirect(url_for('home'))
 
 
@@ -234,8 +349,8 @@ def input_step():
         except: inp = 0.0
         old_T, old_S = node.T, node.S #capture before stepping
         eta2_eff = node.eta2 + inp #effective salinity forcing this step
-        dpsi_dt = node.step(inputs=[inp], dt=DT, noise_sigma=NOISE_SIGMA, model=model)
-        dataset.append([old_T, old_S, node.eta1, eta2_eff, node.eta3, inp, dpsi_dt]) #add to dataset
+        clean_next_T, clean_next_S = node.step(inputs=[inp], dt=DT, noise_sigma=NOISE_SIGMA, model=None)
+        dataset.append([old_T, old_S, node.eta1, eta2_eff, node.eta3, inp, clean_next_T, clean_next_S]) #clean targets
     snapshot()
     return redirect(url_for('home'))
 
@@ -248,45 +363,21 @@ def random_run_input():
     steps = max(1, min(steps, 1000))
     for _ in range(steps):
         for node in nodes:
-            inp = random.uniform(-0.5, 0.5) #small perturbation to eta2
+            inp = random.uniform(-2.0, 2.0) #wider perturbation range for more diverse state coverage
             old_T, old_S = node.T, node.S #capture before stepping
             eta2_eff = node.eta2 + inp #effective salinity forcing this step
-            dpsi_dt = node.step(inputs=[inp], dt=DT, noise_sigma=NOISE_SIGMA, model=None)
-            dataset.append([old_T, old_S, node.eta1, eta2_eff, node.eta3, inp, dpsi_dt]) #add to dataset
+            clean_next_T, clean_next_S = node.step(inputs=[inp], dt=DT, noise_sigma=NOISE_SIGMA, model=None)
+            dataset.append([old_T, old_S, node.eta1, eta2_eff, node.eta3, inp, clean_next_T, clean_next_S]) #clean targets
         snapshot()
     return redirect(url_for('home'))
 
 
-# --- SMART RUN ---
-@app.route("/smart_run_input", methods=["POST"])
-def smart_run_input():
-    global model
-    try: steps = int(request.form.get("steps", 10))
-    except: steps = 10
-    steps = max(1, min(steps, 1000))
-    for _ in range(steps):
-        for node in nodes:
-            if model is None or random.random() < 0.7:
-                inp = float(np.random.normal(loc=0.0, scale=0.3)) #explore with small random perturbation
-            else:
-                # model predicts dpsi_dt at inp=0, then nudge toward positive circulation
-                test = np.array([[node.T, node.S, node.eta1, node.eta2, node.eta3]])
-                predicted_dpsi = float(model.predict(test)[0])
-                inp = predicted_dpsi * 0.3 #nudge input in direction of predicted derivative
-            old_T, old_S = node.T, node.S #capture before stepping
-            eta2_eff = node.eta2 + inp #effective salinity forcing this step
-            dpsi_dt = node.step(inputs=[inp], dt=DT, noise_sigma=NOISE_SIGMA, model=model) #use the model to step 
-            dataset.append([old_T, old_S, node.eta1, eta2_eff, node.eta3, inp, dpsi_dt]) #add to dataset
-        snapshot() #snapshot 
-    return redirect(url_for('home')) #return home well rediriect 
-
-
-@app.route("/train") #retrain 
+@app.route("/train") #retrain
 def train(): #define train
-    global model #train the model with the restrictions
+    global model
     if len(dataset) >= 5: #minimum 5 runs
-        model = trainModel(dataset) #train the model
-    return redirect(url_for('home')) #return home well rediriect 
+        model = trainModel(dataset)
+    return redirect(url_for('home'))
 
 
 if __name__ == "__main__": #if main

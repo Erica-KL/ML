@@ -42,7 +42,6 @@ Tutorial on deterministic ODE
 ODE for states is predicted by ds dt 
 Noise of 0.5 added
 Stommal Two Box Models
-instead of stomel use ogcm
 try out
 try to incorporate stommal two box model
 First step
@@ -71,8 +70,52 @@ Read between
 3.Machine Learning 
 
 -------------------------------------------------------------------
- try OGCM too? 
- two seperate files probably.
- dT/dt = eta1 - T*(1 + |T - S|)
-dS/dt = eta2 - S*(eta3 + |T - S|)
+Tried 0.7 sigma is 0.5 now
+ODES:  EULER working on transitioning Runge-Kutta 4 RK4
+dT/dt = eta1 - T * (1 + |T - S|) - END GOAL but cannot be formally solved
+dS/dt = eta2 - S * (eta3 + |T - S|) - END GOAL
+need more concrete. 
+Many technical details that need to be considered 
+Our objective: start with ODE
+Ocean Space -( 
+    Ocean Space 3D nodes take place with that space  
+    sensor node can sense E1,E2,E3, T, S, PSI metrics 
+    Thermal,Salinity, Thermal Forcing, Salinity Forcing, Salinity and thermal diffusivity
+
+)
+For each sensor node we solve the ode systen
+Numerical 
+Metrics 
+RK4 previously EULER - iterative message - generate a sequence as an output
+I currently have - Given Initial state > T0 and S0 Tn Sn 
+Data Assimilation
+RK4 > ML model
+Clarify training procedure 
+evaluate performance
+argue that test data set compared to performance evaluation
+very critical
+write down procedures 
+Step 1. focus on one single node I T,S, eta1, eta2,eta3 for 100 iterations then argue
+for sample 80 points as 100 points use ADAM or STG or Reluu test my trained model 
+Accuracy? Running Time? Resource Consumption?
+After test observe the perfromance of the machine learning model 
+why do you have to introduce 50 node?
+assume there are 50 sensor node and they are fixed
+each of those 50 nodes follow individual t and S different set
+RK4 to each of the 50 all together supported by gpu 
+that is inefficient 
+Can it handle scalability? does performance decrease? How to increase R^2 upon failure 
+----------------------------------------------------------------------------------
+Summer-
+Changing SkLearn to Pytorch
+Added 3D modeling though considering making the depth go from 0 to 100 instead of 100 to 0 which might take some adjustments
+got rid of old code 
+https://ui.adsabs.harvard.edu/abs/2025AIAAJ..63.2520F/abstract
+add a PINN  (Physics-Informed Neural Network Surrogate Model for Small-Sample Mistuned Bladed Disk (PINN-SMBD)) per the paper
+Changed the color scheme to a more ocean themed look thinking of adding a glassy feel like new IOS 
+Stommel heavy pinn loss lambda = 10.00
+instead of predicting stommel derivitive switched to predicting next temp and salinity the stating the change in psi (not predictive) 
+and predicting next psi.
+The next temp/salinity isnt necessary but serves as a little sanity check
+
 
